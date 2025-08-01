@@ -1,0 +1,28 @@
+[
+  {
+    "profileName": "My Main Account",
+    "orgId": "893141744",
+    "refreshToken": "1000.17e6d8bbdafbd481712d4e12f8444389.61fc8eef513cad62caa293c48c084dd9",
+    "defaultDepartmentId": "1155803000000006907",
+    "fromEmailAddress": "support@clarckhelpednadi.zohodesk.com", 
+    "clientId": "1000.1SD7B7BUTJX9ONE3DFRVOX8XATSOYH",
+    "clientSecret": "958fcffc99cd1f8c6d1fc996a50a396d5570c27168"
+  },
+  {
+    "profileName": "Test account",
+    "orgId": "893159235",
+    "refreshToken": "1000.5b2555f5dba2ce12128d8d7db94e04b4.f46cfacb005ea9792a2f52fd31b63593",
+    "defaultDepartmentId": "1156296000000006907",
+	"fromEmailAddress": "support@heynadihada.zohodesk.com", 
+    "clientId": "1000.C7LNEKYV11SNXVO5XU3X6GYH0DQB8Y",
+    "clientSecret": "a92c28b3cbbb833fe0b7327d983f3f985cb668ea1a"
+  },
+  {
+    "profileName": "aaaaaa",
+    "orgId": "YOUR_MAIN_ACCOUNT_ORG_ID",
+    "refreshToken": "YOUR_MAIN_ACCOUNT_REFRESH_TOKEN",
+    "defaultDepartmentId": "YOUR_MAIN_ACCOUNT_DEPT_ID",
+    "clientId": "YOUR_MAIN_ACCOUNT_CLIENT_ID",
+    "clientSecret": "YOUR_MAIN_ACCOUNT_CLIENT_SECRET"
+  }
+]
