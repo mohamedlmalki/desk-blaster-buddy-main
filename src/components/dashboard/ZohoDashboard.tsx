@@ -6,10 +6,10 @@ import { ProfileSelector } from './ProfileSelector';
 import { TicketForm } from './TicketForm';
 import { ResultsDisplay, TicketResult } from './ResultsDisplay';
 import { useToast } from '@/hooks/use-toast';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw, Mail, Download, Trash2 } from 'lucide-react';
 
 interface JobState {
   results: TicketResult[];
@@ -22,6 +22,7 @@ interface JobState {
   countdown: number;
   currentDelay: number;
   filterText: string;
+  formData: TicketFormData;
 }
 
 interface Jobs {
@@ -56,6 +57,7 @@ interface EmailFailure {
   errorMessage: string;
   departmentName: string;
   channel: string;
+  email?: string;
   assignee: {
       name: string;
   } | null;
@@ -76,6 +78,14 @@ const createInitialJobState = (): JobState => ({
   countdown: 0,
   currentDelay: 1,
   filterText: '',
+  formData: {
+    emails: '',
+    subject: '',
+    description: '',
+    delay: 1,
+    sendDirectReply: false,
+    verifyEmail: false,
+  },
 });
 
 export const ZohoDashboard: React.FC = () => {
@@ -95,7 +105,7 @@ export const ZohoDashboard: React.FC = () => {
   const [emailFailures, setEmailFailures] = useState<EmailFailure[]>([]);
   const [isFailuresModalOpen, setIsFailuresModalOpen] = useState(false);
 
-  const { data: profiles = [], isLoading: profilesLoading } = useQuery<Profile[]>({
+  const { data: profiles = [] } = useQuery<Profile[]>({
     queryKey: ['profiles'],
     queryFn: async () => {
       const response = await fetch(`${SERVER_URL}/api/profiles`);
@@ -108,7 +118,7 @@ export const ZohoDashboard: React.FC = () => {
   });
 
   useEffect(() => {
-    if (profiles.length > 0) {
+    if (profiles.length > 0 && Object.keys(jobs).length === 0) {
       const initialJobs: Jobs = {};
       profiles.forEach(p => {
         initialJobs[p.profileName] = createInitialJobState();
@@ -118,7 +128,7 @@ export const ZohoDashboard: React.FC = () => {
         setActiveProfileName(profiles[0].profileName);
       }
     }
-  }, [profiles]);
+  }, [profiles, activeProfileName, jobs]);
 
   useEffect(() => {
     socket = io(SERVER_URL);
@@ -173,10 +183,16 @@ export const ZohoDashboard: React.FC = () => {
     });
 
     socket.on('emailFailuresResult', (result) => {
-      if (result.success) {
-        setEmailFailures(result.data || []);
+      if (result.success && Array.isArray(result.data)) {
+        const formattedFailures = result.data.map((failure: any) => ({
+          ...failure,
+          assignee: failure.assignee 
+            ? { name: `${failure.assignee.firstName || ''} ${failure.assignee.lastName || ''}`.trim() }
+            : null,
+        }));
+        setEmailFailures(formattedFailures);
         setIsFailuresModalOpen(true);
-      } else {
+      } else if (!result.success) {
         toast({ title: "Error Fetching Failures", description: result.error, variant: "destructive" });
       }
     });
@@ -193,6 +209,16 @@ export const ZohoDashboard: React.FC = () => {
     socket.on('bulkEnded', ({ profileName }) => handleJobCompletion(profileName, `Job Ended for ${profileName}`, "The process was stopped by the user.", "destructive"));
     socket.on('bulkError', ({ message, profileName }) => handleJobCompletion(profileName, `Server Error for ${profileName}`, message, "destructive"));
     
+    socket.on('clearEmailFailuresResult', (result) => {
+        if (result.success) {
+            toast({ title: "Success", description: "Email failure alerts have been cleared." });
+            setEmailFailures([]);
+            setIsFailuresModalOpen(false);
+        } else {
+            toast({ title: "Error Clearing Failures", description: result.error, variant: "destructive" });
+        }
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -210,12 +236,12 @@ export const ZohoDashboard: React.FC = () => {
 
     Object.keys(jobs).forEach(profileName => {
       const job = jobs[profileName];
+      if (!job) return;
       if (!timers[profileName]) timers[profileName] = {};
 
       const isProcessingTimerRunning = !!timers[profileName].processing;
       const isCountdownTimerRunning = !!timers[profileName].countdown;
 
-      // Handle Processing Timer
       if (job.isProcessing && !job.isPaused && job.processingStartTime && !isProcessingTimerRunning) {
         timers[profileName].processing = setInterval(() => {
           setJobs(prev => {
@@ -229,7 +255,6 @@ export const ZohoDashboard: React.FC = () => {
         delete timers[profileName].processing;
       }
 
-      // Handle Countdown Timer
       if (job.isProcessing && !job.isPaused && job.countdown > 0 && !isCountdownTimerRunning) {
         timers[profileName].countdown = setInterval(() => {
           setJobs(prev => {
@@ -293,6 +318,18 @@ export const ZohoDashboard: React.FC = () => {
     socket.emit('sendTestTicket', { ...data, selectedProfileName: activeProfileName });
   };
 
+  const handleFormDataChange = (newFormData: TicketFormData) => {
+    if (activeProfileName) {
+      setJobs(prevJobs => ({
+        ...prevJobs,
+        [activeProfileName]: {
+          ...prevJobs[activeProfileName],
+          formData: newFormData,
+        },
+      }));
+    }
+  };
+
   const handleFormSubmit = async (formData: TicketFormData) => {
     if (!activeProfileName) {
         toast({ title: "Missing Information", description: "Please select a profile.", variant: "destructive" });
@@ -307,11 +344,15 @@ export const ZohoDashboard: React.FC = () => {
     setJobs(prev => ({
         ...prev,
         [activeProfileName]: {
-            ...createInitialJobState(),
+            ...prev[activeProfileName],
+            results: [],
             isProcessing: true,
+            isPaused: false,
+            isComplete: false,
             processingStartTime: new Date(),
             totalTicketsToProcess: emails.length,
             currentDelay: formData.delay,
+            formData: formData, 
         }
     }));
     
@@ -363,6 +404,24 @@ export const ZohoDashboard: React.FC = () => {
     totalToProcess: currentJob?.totalTicketsToProcess ?? 0,
     isProcessing: currentJob?.isProcessing ?? false,
   };
+  
+  const handleExportFailures = () => {
+    const content = emailFailures.map(f => f.email).join('\n');
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", "failed-emails.txt");
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleClearFailures = () => {
+    if (!activeProfileName) return;
+    socket.emit('clearEmailFailures', { selectedProfileName: activeProfileName });
+  };
 
   return (
     <>
@@ -371,10 +430,7 @@ export const ZohoDashboard: React.FC = () => {
           <ProfileSelector
             profiles={profiles}
             selectedProfile={selectedProfile}
-            // --- START: MODIFICATION ---
-            // Pass the entire jobs object to the selector
             jobs={jobs}
-            // --- END: MODIFICATION ---
             onProfileChange={handleProfileChange}
             apiStatus={apiStatus}
             onShowStatus={() => setIsStatusModalOpen(true)}
@@ -384,6 +440,8 @@ export const ZohoDashboard: React.FC = () => {
           {currentJob && (
             <>
               <TicketForm
+                formData={currentJob.formData}
+                onFormDataChange={handleFormDataChange}
                 onSubmit={handleFormSubmit}
                 isProcessing={currentJob.isProcessing}
                 isPaused={currentJob.isPaused}
@@ -497,7 +555,10 @@ export const ZohoDashboard: React.FC = () => {
                       <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center space-x-2">
                             <Ticket className="h-4 w-4 text-primary"/>
-                            <span className="font-semibold text-foreground">Ticket #{failure.ticketNumber}</span>
+                            <span className="font-semibold text-foreground">
+                              Ticket #{failure.ticketNumber}:
+                              <span className="font-normal text-muted-foreground ml-2">{failure.email}</span>
+                            </span>
                           </div>
                           <Badge variant="destructive">Failed</Badge>
                       </div>
@@ -530,7 +591,17 @@ export const ZohoDashboard: React.FC = () => {
                 </div>
               )}
             </div>
-            <Button onClick={() => setIsFailuresModalOpen(false)} className="mt-4">Close</Button>
+            <DialogFooter className="pt-4 border-t mt-4">
+                <Button variant="outline" onClick={handleExportFailures} disabled={emailFailures.length === 0}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Export Emails
+                </Button>
+                <Button variant="destructive" onClick={handleClearFailures} disabled={emailFailures.length === 0}>
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Clear All Failures
+                </Button>
+                <Button onClick={() => setIsFailuresModalOpen(false)}>Close</Button>
+            </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

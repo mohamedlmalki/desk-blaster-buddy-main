@@ -6,7 +6,8 @@
     "defaultDepartmentId": "1155803000000006907",
     "fromEmailAddress": "support@clarckhelpednadi.zohodesk.com", 
     "clientId": "1000.1SD7B7BUTJX9ONE3DFRVOX8XATSOYH",
-    "clientSecret": "958fcffc99cd1f8c6d1fc996a50a396d5570c27168"
+    "clientSecret": "958fcffc99cd1f8c6d1fc996a50a396d5570c27168",
+    "mailReplyAddressId": "1155803000000349008"
   },
   {
     "profileName": "Test account",

@@ -1,14 +1,18 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, Activity } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, Activity, Edit } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 interface Profile {
   profileName: string;
   orgId: string;
   defaultDepartmentId: string;
+  mailReplyAddressId?: string; // This line is updated
 }
 
 type ApiStatus = {
@@ -23,17 +27,16 @@ type ApiStatus = {
     }
 };
 
-// --- START: MODIFICATION ---
-// Updated the props to receive the `jobs` object
 interface ProfileSelectorProps {
   profiles: Profile[];
   selectedProfile: Profile | null;
-  jobs: { [key: string]: { isProcessing: boolean; results: {length: number}; totalTicketsToProcess: number } };
+  jobs: { [key: string]: { isProcessing: boolean; isPaused: boolean; results: {length: number}; totalTicketsToProcess: number } };
   onProfileChange: (profileName: string) => void;
   apiStatus: ApiStatus;
   onShowStatus: () => void;
   onFetchFailures: () => void;
   onManualVerify: () => void;
+  socket: any; // This prop is added
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
@@ -45,8 +48,66 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   onShowStatus,
   onFetchFailures,
   onManualVerify,
+  socket,
 }) => {
-// --- END: MODIFICATION ---
+  const { toast } = useToast();
+  const [displayName, setDisplayName] = useState('');
+  const [isLoadingName, setIsLoadingName] = useState(false);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleDetailsResult = (result: any) => {
+        setIsLoadingName(false);
+        if (result.success) {
+            if (result.notConfigured) {
+                setDisplayName('N/A');
+            } else {
+                setDisplayName(result.data?.displayName || '');
+            }
+        } else {
+            toast({ title: "Error Fetching Sender Name", description: result.error, variant: "destructive" });
+        }
+    };
+    const handleUpdateResult = (result: any) => {
+        if (result.success) {
+            setDisplayName(result.data.displayName);
+            toast({ title: "Success", description: "Sender name has been updated." });
+        } else {
+            toast({ title: "Error Updating Name", description: result.error, variant: "destructive" });
+        }
+    };
+    
+    socket.on('mailReplyAddressDetailsResult', handleDetailsResult);
+    socket.on('updateMailReplyAddressResult', handleUpdateResult);
+
+    return () => {
+        socket.off('mailReplyAddressDetailsResult', handleDetailsResult);
+        socket.off('updateMailReplyAddressResult', handleUpdateResult);
+    };
+  }, [socket, toast]);
+
+  const fetchDisplayName = () => {
+      if (selectedProfile?.mailReplyAddressId && socket) {
+          setIsLoadingName(true);
+          socket.emit('getMailReplyAddressDetails', { selectedProfileName: selectedProfile.profileName });
+      } else {
+          setDisplayName('N/A');
+      }
+  };
+
+  useEffect(() => {
+    if (selectedProfile && socket) {
+      fetchDisplayName();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProfile, socket]);
+
+  const handleUpdateName = () => {
+      if (selectedProfile?.mailReplyAddressId && socket) {
+          socket.emit('updateMailReplyAddressDetails', { selectedProfileName: selectedProfile.profileName, displayName });
+      }
+  };
 
   const getBadgeProps = () => {
     switch (apiStatus.status) {
@@ -84,19 +145,14 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
             </SelectTrigger>
             <SelectContent className="bg-card border-border shadow-large">
               {profiles.map((profile) => {
-                // --- START: MODIFICATION ---
-                // Logic to get the progress for each profile in the dropdown
                 const job = jobs[profile.profileName];
                 const isJobActive = job && job.isProcessing;
-                // --- END: MODIFICATION ---
                 return (
                   <SelectItem 
                     key={profile.profileName} 
                     value={profile.profileName}
                     className="cursor-pointer hover:bg-accent focus:bg-accent"
                   >
-                    {/* --- START: MODIFICATION --- */}
-                    {/* Display the profile name and the live progress badge */}
                     <div className="flex items-center justify-between w-full">
                       <div className="flex items-center space-x-3">
                         <Building className="h-4 w-4 text-muted-foreground" />
@@ -105,11 +161,10 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                       {isJobActive && (
                         <Badge variant="outline" className="font-mono text-xs">
                           <Activity className="h-3 w-3 mr-1.5 animate-pulse text-primary"/>
-                          {job.results.length}/{job.totalTicketsToProcess}
+                          {job.results.length}/{job.totalTicketsToProcess} {job.isPaused ? 'paused' : 'processing'}
                         </Badge>
                       )}
                     </div>
-                    {/* --- END: MODIFICATION --- */}
                   </SelectItem>
                 )
               })}
@@ -163,6 +218,36 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                     <span className="text-muted-foreground">Department ID:</span>
                     <span className="font-mono text-foreground">{selectedProfile.defaultDepartmentId}</span>
                   </div>
+              </div>
+              <div className="space-y-1 text-sm mt-4 pt-4 border-t border-border/50">
+                <Label htmlFor="displayName" className="flex items-center space-x-2 text-muted-foreground">
+                    <Edit className="h-4 w-4" />
+                    <span>Sender Name (Display Name)</span>
+                </Label>
+                <div className="flex items-center space-x-2">
+                    <Input 
+                        id="displayName"
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder={isLoadingName ? "Loading..." : "Not configured for this profile"}
+                        disabled={!selectedProfile.mailReplyAddressId || isLoadingName}
+                    />
+                    <Button 
+                        size="sm" 
+                        onClick={handleUpdateName} 
+                        disabled={!selectedProfile.mailReplyAddressId || isLoadingName || displayName === 'N/A'}
+                    >
+                        Update
+                    </Button>
+                    <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        onClick={fetchDisplayName} 
+                        disabled={!selectedProfile.mailReplyAddressId || isLoadingName}
+                    >
+                        <RefreshCw className={`h-4 w-4 ${isLoadingName ? 'animate-spin' : ''}`} />
+                    </Button>
+                </div>
               </div>
             </div>
           )}

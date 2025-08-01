@@ -1,4 +1,6 @@
-import React, { useState, useRef } from 'react'; // Import useRef
+// src/components/dashboard/TicketForm.tsx
+
+import React, { useState, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -6,9 +8,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square, Bot, Upload } from 'lucide-react'; // Import Upload icon
+import { Send, Eye, Mail, Clock, MessageSquare, Users, Pause, Play, Square, Bot, Upload } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
-
 
 interface TicketFormData {
   emails: string;
@@ -19,6 +20,7 @@ interface TicketFormData {
   verifyEmail: boolean;
 }
 
+// --- MODIFICATION 1: Update props for a controlled component ---
 interface TicketFormProps {
   onSubmit: (data: TicketFormData) => void; 
   isProcessing: boolean;
@@ -26,6 +28,8 @@ interface TicketFormProps {
   onPauseResume: () => void;
   onEndJob: () => void;
   onSendTest: (data: { email: string, subject: string, description: string, sendDirectReply: boolean, verifyEmail: boolean }) => void;
+  formData: TicketFormData;
+  onFormDataChange: (data: TicketFormData) => void;
 }
 
 export const TicketForm: React.FC<TicketFormProps> = ({ 
@@ -35,18 +39,14 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   onPauseResume,
   onEndJob,
   onSendTest,
+  formData,
+  onFormDataChange,
 }) => {
-  const [formData, setFormData] = useState<TicketFormData>({
-    emails: '',
-    subject: '',
-    description: '',
-    delay: 1,
-    sendDirectReply: false,
-    verifyEmail: false,
-  });
+  // This component no longer holds its own form state.
+  // It receives `formData` from its parent.
 
   const [testEmail, setTestEmail] = useState('');
-  const fileInputRef = useRef<HTMLInputElement>(null); // Ref for file input
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const emailCount = formData.emails
     .split('\n')
@@ -57,12 +57,13 @@ export const TicketForm: React.FC<TicketFormProps> = ({
     onSubmit(formData);
   };
 
+  // --- MODIFICATION 2: Update handlers to use the onFormDataChange prop ---
   const handleInputChange = (field: keyof Omit<TicketFormData, 'sendDirectReply' | 'verifyEmail'>, value: string | number) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    onFormDataChange({ ...formData, [field]: value });
   };
 
   const handleCheckboxChange = (field: 'sendDirectReply' | 'verifyEmail', checked: boolean) => {
-    setFormData(prev => ({...prev, [field]: checked}));
+    onFormDataChange({ ...formData, [field]: checked });
   }
 
   const handleTestClick = () => {
@@ -75,22 +76,18 @@ export const TicketForm: React.FC<TicketFormProps> = ({
     });
   };
 
-  // --- START: NEW FEATURE ---
-  // Logic to handle file import
   const handleFileImport = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target?.result as string;
-        // Extracts emails from the file content and joins them with newlines
         const emails = content.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/gi) || [];
-        setFormData(prev => ({ ...prev, emails: emails.join('\n') }));
+        onFormDataChange({ ...formData, emails: emails.join('\n') });
       };
       reader.readAsText(file);
     }
   };
-  // --- END: NEW FEATURE ---
 
   return (
     <Card className="shadow-medium hover:shadow-large transition-all duration-300">
@@ -114,7 +111,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                     <Mail className="h-4 w-4" />
                     <span>Recipient Emails</span>
                   </Label>
-                  {/* --- START: NEW FEATURE --- */}
                   <div className='flex items-center space-x-2'>
                     <input
                       type="file"
@@ -138,7 +134,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
                       {emailCount} recipients
                     </Badge>
                   </div>
-                  {/* --- END: NEW FEATURE --- */}
                 </div>
                 <Textarea
                   id="emails"

@@ -1,3 +1,5 @@
+// server/index.js
+
 const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
@@ -15,6 +17,32 @@ const port = process.env.PORT || 3000;
 
 const tokenCache = {};
 const activeJobs = {}; 
+const TICKET_LOG_PATH = path.join(__dirname, 'ticket-log.json');
+
+// --- HELPER FUNCTIONS FOR TICKET LOG ---
+const readTicketLog = () => {
+    try {
+        if (fs.existsSync(TICKET_LOG_PATH)) {
+            const data = fs.readFileSync(TICKET_LOG_PATH);
+            return JSON.parse(data);
+        }
+    } catch (error) {
+        console.error('[ERROR] Could not read ticket-log.json:', error);
+    }
+    return [];
+};
+
+const writeToTicketLog = (newEntry) => {
+    const log = readTicketLog();
+    log.push(newEntry);
+    try {
+        fs.writeFileSync(TICKET_LOG_PATH, JSON.stringify(log, null, 2));
+    } catch (error) {
+        console.error('[ERROR] Could not write to ticket-log.json:', error);
+    }
+};
+// --- END HELPER FUNCTIONS ---
+
 
 const createJobId = (socketId, profileName) => `${socketId}_${profileName}`;
 
@@ -65,7 +93,8 @@ const getValidAccessToken = async (profile) => {
             refresh_token: profile.refreshToken,
             client_id: profile.clientId,
             client_secret: profile.clientSecret,
-            grant_type: 'refresh_token'
+            grant_type: 'refresh_token',
+            scope: 'Desk.tickets.ALL,Desk.settings.READ,Desk.settings.UPDATE'
         });
 
         const response = await axios.post('https://accounts.zoho.com/oauth/v2/token', params);
@@ -168,8 +197,6 @@ io.on('connection', (socket) => {
                 return socket.emit('testTicketResult', { success: false, error: 'Profile not found.' });
             }
             
-            // --- START: MODIFICATION ---
-            // Explicitly set the channel to "Email"
             const ticketData = { 
                 subject, 
                 description, 
@@ -177,7 +204,6 @@ io.on('connection', (socket) => {
                 contact: { email },
                 channel: 'Email' 
             };
-            // --- END: MODIFICATION ---
 
             const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
             const newTicket = ticketResponse.data;
@@ -238,8 +264,6 @@ io.on('connection', (socket) => {
                 const email = emails[i];
                 if (!email.trim()) continue;
 
-                // --- START: MODIFICATION ---
-                // Explicitly set the channel to "Email" for bulk creation as well
                 const ticketData = { 
                     subject, 
                     description, 
@@ -247,7 +271,6 @@ io.on('connection', (socket) => {
                     contact: { email },
                     channel: 'Email' 
                 };
-                // --- END: MODIFICATION ---
 
                 try {
                     const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
@@ -255,6 +278,8 @@ io.on('connection', (socket) => {
                     let successMessage = `Ticket #${newTicket.ticketNumber} created.`;
                     let fullResponseData = { ticketCreate: newTicket };
                     let overallSuccess = true; 
+
+                    writeToTicketLog({ ticketNumber: newTicket.ticketNumber, email });
 
                     if (sendDirectReply) {
                         try {
@@ -340,7 +365,7 @@ io.on('connection', (socket) => {
                     profileName: profile.profileName,
                 });
             } else {
-                const failureResponse = await makeApiCall('get', `/api/v1/emailFailureAlerts?departmentId=${profile.defaultDepartmentId}`, null, profile);
+                const failureResponse = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${profile.defaultDepartmentId}`, null, profile);
                 fullResponse.verifyEmail.failure = failureResponse.data;
                 const failure = failureResponse.data.data?.find(f => f.ticketNumber === ticket.ticketNumber);
     
@@ -412,14 +437,83 @@ io.on('connection', (socket) => {
             }
 
             const departmentId = activeProfile.defaultDepartmentId;
-            const response = await makeApiCall('get', `/api/v1/emailFailureAlerts?departmentId=${departmentId}&limit=50`, null, activeProfile);
+            const response = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${departmentId}&limit=50`, null, activeProfile);
             
-            socket.emit('emailFailuresResult', { success: true, data: response.data.data });
+            const failures = response.data.data || [];
+            const ticketLog = readTicketLog();
+            const failuresWithEmails = failures.map(failure => {
+                const logEntry = ticketLog.find(entry => entry.ticketNumber === failure.ticketNumber);
+                return {
+                    ...failure,
+                    email: logEntry ? logEntry.email : 'Unknown',
+                };
+            });
+
+            socket.emit('emailFailuresResult', { success: true, data: failuresWithEmails });
         } catch (error) {
             const { message } = parseError(error);
             socket.emit('emailFailuresResult', { success: false, error: message });
         }
     });
+
+    socket.on('clearEmailFailures', async (data) => {
+        try {
+            const { selectedProfileName } = data;
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+            if (!activeProfile) {
+                throw new Error('Profile not found for clearing email failures.');
+            }
+
+            const departmentId = activeProfile.defaultDepartmentId;
+            await makeApiCall('patch', `/api/v1/emailFailureAlerts?department=${departmentId}`, null, activeProfile);
+            
+            socket.emit('clearEmailFailuresResult', { success: true });
+        } catch (error) {
+            const { message } = parseError(error);
+            socket.emit('clearEmailFailuresResult', { success: false, error: message });
+        }
+    });
+
+    // --- NEW FUNCTIONALITY ---
+    socket.on('getMailReplyAddressDetails', async (data) => {
+        try {
+            const { selectedProfileName } = data;
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+
+            if (!activeProfile || !activeProfile.mailReplyAddressId) {
+                return socket.emit('mailReplyAddressDetailsResult', { success: true, notConfigured: true });
+            }
+
+            const response = await makeApiCall('get', `/api/v1/mailReplyAddress/${activeProfile.mailReplyAddressId}`, null, activeProfile);
+            socket.emit('mailReplyAddressDetailsResult', { success: true, data: response.data });
+        } catch (error) {
+            const { message } = parseError(error);
+            socket.emit('mailReplyAddressDetailsResult', { success: false, error: message });
+        }
+    });
+
+    socket.on('updateMailReplyAddressDetails', async (data) => {
+        try {
+            const { selectedProfileName, displayName } = data;
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+
+            if (!activeProfile || !activeProfile.mailReplyAddressId) {
+                throw new Error('Mail Reply Address ID is not configured for this profile.');
+            }
+
+            const updateData = { displayName };
+            const response = await makeApiCall('patch', `/api/v1/mailReplyAddress/${activeProfile.mailReplyAddressId}`, updateData, activeProfile);
+            
+            socket.emit('updateMailReplyAddressResult', { success: true, data: response.data });
+        } catch (error) {
+            const { message } = parseError(error);
+            socket.emit('updateMailReplyAddressResult', { success: false, error: message });
+        }
+    });
+    // --- END NEW FUNCTIONALITY ---
 });
 
 server.listen(port, () => {
