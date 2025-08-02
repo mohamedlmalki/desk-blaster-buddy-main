@@ -79,6 +79,7 @@ const SingleTicket = () => {
   }, [profiles, activeProfileName]);
 
   useEffect(() => {
+    // Socket is now only used for non-ticket-creation tasks on this page
     socket = io(SERVER_URL);
 
     socket.on('connect', () => toast({ title: "Connected to server!" }));
@@ -87,18 +88,7 @@ const SingleTicket = () => {
       message: result.message,
       fullResponse: result.fullResponse || null
     }));
-
-    // Listener for our new single ticket event
-    socket.on('singleTicketResult', (result) => {
-      setIsProcessing(false);
-      setServerResponse(result);
-      toast({
-        title: result.success ? "Ticket Created Successfully" : "Ticket Creation Failed",
-        description: result.success ? `Ticket #${result.fullResponse?.ticketCreate?.ticketNumber} created.` : result.error,
-        variant: result.success ? "default" : "destructive",
-      });
-    });
-
+    
     socket.on('emailFailuresResult', (result) => {
       if (result.success && Array.isArray(result.data)) {
         const formattedFailures = result.data.map((failure: any) => ({
@@ -144,7 +134,7 @@ const SingleTicket = () => {
     }
   };
 
-  const handleCreateTicket = () => {
+  const handleCreateTicket = async () => {
     if (!activeProfileName) {
       toast({ title: "No Profile Selected", variant: "destructive" });
       return;
@@ -158,14 +148,42 @@ const SingleTicket = () => {
     setServerResponse(null);
     toast({ title: "Creating Ticket..." });
 
-    socket.emit('createSingleTicket', {
-      email,
-      subject,
-      description,
-      sendDirectReply,
-      verifyEmail,
-      selectedProfileName: activeProfileName,
-    });
+    try {
+        const response = await fetch(`${SERVER_URL}/api/tickets/single`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                email,
+                subject,
+                description,
+                sendDirectReply,
+                verifyEmail, // Note: Verification is not implemented for HTTP requests
+                selectedProfileName: activeProfileName,
+            }),
+        });
+
+        const result = await response.json();
+        
+        setServerResponse(result);
+        toast({
+            title: result.success ? "Ticket Created Successfully" : "Ticket Creation Failed",
+            description: result.success ? `Ticket #${result.fullResponse?.ticketCreate?.ticketNumber} created.` : result.error,
+            variant: result.success ? "default" : "destructive",
+        });
+
+    } catch (error) {
+        const errorMessage = (error instanceof Error) ? error.message : "An unknown network error occurred.";
+        setServerResponse({ success: false, error: errorMessage });
+        toast({
+            title: "Network Error",
+            description: errorMessage,
+            variant: "destructive",
+        });
+    } finally {
+        setIsProcessing(false);
+    }
   };
 
   const handleManualVerify = () => {
@@ -206,6 +224,14 @@ const SingleTicket = () => {
     if (!activeProfileName) return;
     socket.emit('clearEmailFailures', { selectedProfileName: activeProfileName });
   };
+  
+  const handleClearTicketLogs = () => {
+    if (window.confirm("Are you sure you want to permanently delete all ticket logs? This action cannot be undone.")) {
+      toast({ title: "Clearing Ticket Logs..." });
+      socket.emit('clearTicketLogs');
+    }
+  };
+
 
   const selectedProfile = profiles.find(p => p.profileName === activeProfileName) || null;
 
@@ -223,6 +249,7 @@ const SingleTicket = () => {
             onFetchFailures={handleFetchEmailFailures}
             onManualVerify={handleManualVerify}
             socket={socket}
+            onClearTicketLogs={handleClearTicketLogs}
           />
 
           <Card className="shadow-medium hover:shadow-large transition-all duration-300">
@@ -258,7 +285,7 @@ const SingleTicket = () => {
                         <Checkbox id="verifyEmail" checked={verifyEmail} onCheckedChange={(checked) => setVerifyEmail(!!checked)} disabled={isProcessing || sendDirectReply} />
                         <div>
                           <Label htmlFor="verifyEmail" className="font-medium hover:cursor-pointer">Verify Automation Email</Label>
-                          <p className="text-xs text-muted-foreground">Slower. Waits and checks if Zoho's automation email was sent.</p>
+                          <p className="text-xs text-muted-foreground">NOTE: Verification is not supported for single ticket creation via HTTP request.</p>
                         </div>
                       </div>
                     </div>
@@ -277,7 +304,7 @@ const SingleTicket = () => {
             </CardContent>
           </Card>
 
-          {/* --- MODIFIED RESPONSE DISPLAY AREA --- */}
+          {/* --- RESPONSE DISPLAY AREA --- */}
           {serverResponse && (
             <div className="space-y-4">
               <Card>
@@ -291,42 +318,10 @@ const SingleTicket = () => {
                 </CardHeader>
                 <CardContent>
                   <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
-                    {JSON.stringify(serverResponse.fullResponse?.ticketCreate || serverResponse.fullResponse, null, 2)}
+                    {JSON.stringify(serverResponse.fullResponse || serverResponse, null, 2)}
                   </pre>
                 </CardContent>
               </Card>
-
-              {serverResponse.fullResponse?.sendReply && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <Mail className="h-5 w-5 text-primary"/>
-                      <span>Send Reply Response</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
-                      {JSON.stringify(serverResponse.fullResponse.sendReply, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
-              )}
-
-              {serverResponse.fullResponse?.verifyEmail && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle className="flex items-center space-x-2">
-                      <Bot className="h-5 w-5 text-primary"/>
-                      <span>Email Verification Response</span>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
-                      {JSON.stringify(serverResponse.fullResponse.verifyEmail, null, 2)}
-                    </pre>
-                  </CardContent>
-                </Card>
-              )}
             </div>
           )}
         </div>
@@ -359,7 +354,7 @@ const SingleTicket = () => {
       <Dialog open={isFailuresModalOpen} onOpenChange={setIsFailuresModalOpen}>
         <DialogContent className="max-w-3xl">
             <DialogHeader>
-                <DialogTitle>Email Delivery Failure Alerts</DialogTitle>
+                <DialogTitle>Email Delivery Failure Alerts ({emailFailures.length})</DialogTitle>
                 <DialogDescription>
                     Showing recent email delivery failures for the selected department.
                 </DialogDescription>

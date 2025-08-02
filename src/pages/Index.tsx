@@ -1,6 +1,7 @@
 import { ZohoDashboard } from "@/components/dashboard/ZohoDashboard";
+import { Socket } from "socket.io-client";
 
-// --- Define the shapes of the data being passed down ---
+// --- Interfaces (these are useful for type safety) ---
 interface TicketFormData {
   emails: string;
   subject: string;
@@ -20,6 +21,7 @@ interface TicketResult {
 }
 
 interface JobState {
+  formData: TicketFormData;
   results: TicketResult[];
   isProcessing: boolean;
   isPaused: boolean;
@@ -36,21 +38,20 @@ interface Jobs {
   [profileName: string]: JobState;
 }
 
-// --- Update the props to include jobs and setJobs ---
 interface IndexProps {
-  formData: TicketFormData;
-  onFormDataChange: (newFormData: TicketFormData) => void;
   jobs: Jobs;
   setJobs: React.Dispatch<React.SetStateAction<Jobs>>;
+  socket: Socket | null;
+  createInitialJobState: () => JobState;
 }
 
-const Index = ({ formData, onFormDataChange, jobs, setJobs }: IndexProps) => {
+const Index = ({ jobs, setJobs, socket, createInitialJobState }: IndexProps) => {
   return (
     <ZohoDashboard 
-      formData={formData} 
-      onFormDataChange={onFormDataChange} 
       jobs={jobs}
       setJobs={setJobs}
+      socket={socket}
+      createInitialJobState={createInitialJobState}
     />
   );
 };

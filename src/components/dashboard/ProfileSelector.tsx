@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, Activity, Edit, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { Socket } from 'socket.io-client';
 
 interface Profile {
   profileName: string;
@@ -36,8 +37,8 @@ interface ProfileSelectorProps {
   onShowStatus: () => void;
   onFetchFailures: () => void;
   onManualVerify: () => void;
-  socket: any; 
-  onClearTicketLogs: () => void; // New prop for the clear logs button
+  socket: Socket | null;
+  onClearTicketLogs: () => void;
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
@@ -50,7 +51,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   onFetchFailures,
   onManualVerify,
   socket,
-  onClearTicketLogs, // Destructure the new prop
+  onClearTicketLogs,
 }) => {
   const { toast } = useToast();
   const [displayName, setDisplayName] = useState('');
@@ -179,7 +180,6 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                 <span className="text-sm font-medium text-foreground">Active Profile</span>
                 
                 <div className="flex items-center space-x-2">
-                  {/* --- NEW BUTTON ADDED HERE --- */}
                   <Button variant="outline" size="sm" onClick={onClearTicketLogs}>
                       <Trash2 className="h-4 w-4 mr-2"/>
                       Clear Ticket Logs

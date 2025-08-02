@@ -16,7 +16,7 @@ const io = new Server(server, { cors: { origin: "http://localhost:8080" } });
 const port = process.env.PORT || 3000;
 
 const tokenCache = {};
-const activeJobs = {}; 
+const activeJobs = {};
 const TICKET_LOG_PATH = path.join(__dirname, 'ticket-log.json');
 
 // --- HELPER FUNCTIONS FOR TICKET LOG ---
@@ -47,7 +47,7 @@ const writeToTicketLog = (newEntry) => {
 const createJobId = (socketId, profileName) => `${socketId}_${profileName}`;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json()); // Middleware to parse JSON bodies
 
 const parseError = (error) => {
     if (error.response) {
@@ -131,6 +131,59 @@ const makeApiCall = async (method, relativeUrl, data, profile) => {
     return axios({ method, url: fullUrl, data, headers });
 };
 
+// --- HTTP ENDPOINT FOR SINGLE TICKET ---
+app.post('/api/tickets/single', async (req, res) => {
+    const { email, subject, description, selectedProfileName, sendDirectReply } = req.body;
+
+    if (!email || !selectedProfileName) {
+        return res.status(400).json({ success: false, error: 'Missing email or profile.' });
+    }
+    try {
+        const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+        const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+        if (!activeProfile) {
+            return res.status(404).json({ success: false, error: 'Profile not found.' });
+        }
+        
+        const ticketData = { 
+            subject, 
+            description, 
+            departmentId: activeProfile.defaultDepartmentId, 
+            contact: { email },
+            channel: 'Email' 
+        };
+
+        const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
+        const newTicket = ticketResponse.data;
+        let fullResponseData = { ticketCreate: newTicket };
+
+        writeToTicketLog({ ticketNumber: newTicket.ticketNumber, email });
+
+        if (sendDirectReply) {
+            try {
+                const replyData = {
+                    fromEmailAddress: activeProfile.fromEmailAddress,
+                    to: email,
+                    content: description,
+                    contentType: 'html',
+                    channel: 'EMAIL'
+                };
+                const replyResponse = await makeApiCall('post', `/api/v1/tickets/${newTicket.id}/sendReply`, replyData, activeProfile);
+                fullResponseData.sendReply = replyResponse.data;
+            } catch (replyError) {
+                fullResponseData.sendReply = parseError(replyError);
+            }
+        }
+        
+        res.json({ success: true, fullResponse: fullResponseData });
+
+    } catch (error) {
+        const { message, fullResponse } = parseError(error);
+        res.status(500).json({ success: false, error: message, fullResponse });
+    }
+});
+
+
 app.get('/api/profiles', (req, res) => {
     try {
         const profilesData = fs.readFileSync(path.join(__dirname, 'profiles.json'));
@@ -184,6 +237,20 @@ io.on('connection', (socket) => {
             }, interval);
         });
     };
+
+    // --- NEW: WebSocket listener for verifying a single ticket ---
+    socket.on('verifySingleTicket', async ({ ticket, profileName }) => {
+        try {
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === profileName);
+            if (activeProfile && ticket) {
+                await verifyTicketEmail(ticket, activeProfile, socket, 'singleTicketVerificationResult');
+            }
+        } catch (error) {
+            console.error('[ERROR] in verifySingleTicket:', error);
+        }
+    });
+
 
     socket.on('sendTestTicket', async (data) => {
         const { email, subject, description, selectedProfileName, sendDirectReply, verifyEmail } = data;
@@ -478,7 +545,6 @@ io.on('connection', (socket) => {
         }
     });
     
-    // --- NEW: Clear Ticket Logs functionality ---
     socket.on('clearTicketLogs', () => {
         try {
             fs.writeFileSync(TICKET_LOG_PATH, JSON.stringify([], null, 2));
@@ -492,32 +558,22 @@ io.on('connection', (socket) => {
     socket.on('getMailReplyAddressDetails', async (data) => {
         try {
             const { selectedProfileName } = data;
-            console.log(`[DEBUG] Received request for profile: ${selectedProfileName}`);
-
             const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
             const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
 
             if (!activeProfile) {
-                console.error(`[DEBUG] Profile not found: ${selectedProfileName}`);
                 return socket.emit('mailReplyAddressDetailsResult', { success: false, error: 'Profile not found' });
             }
             
-            console.log(`[DEBUG] Found mailReplyAddressId: ${activeProfile.mailReplyAddressId}`);
-
             if (!activeProfile.mailReplyAddressId) {
                 return socket.emit('mailReplyAddressDetailsResult', { success: true, notConfigured: true });
             }
 
             const response = await makeApiCall('get', `/api/v1/mailReplyAddress/${activeProfile.mailReplyAddressId}`, null, activeProfile);
-            
-            console.log("[DEBUG] Zoho API Success Response:", response.data);
-
             socket.emit('mailReplyAddressDetailsResult', { success: true, data: response.data });
-        } catch (error) {
-            const { message, fullResponse } = parseError(error);
-            
-            console.error("[DEBUG] Zoho API Error:", { message, fullResponse });
 
+        } catch (error) {
+            const { message } = parseError(error);
             socket.emit('mailReplyAddressDetailsResult', { success: false, error: message });
         }
     });
@@ -542,59 +598,6 @@ io.on('connection', (socket) => {
         }
     });
     
-    socket.on('createSingleTicket', async (data) => {
-        const { email, subject, description, selectedProfileName, sendDirectReply, verifyEmail } = data;
-        if (!email || !selectedProfileName) {
-            return socket.emit('singleTicketResult', { success: false, error: 'Missing email or profile.' });
-        }
-        try {
-            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
-            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
-            if (!activeProfile) {
-                return socket.emit('singleTicketResult', { success: false, error: 'Profile not found.' });
-            }
-            
-            const ticketData = { 
-                subject, 
-                description, 
-                departmentId: activeProfile.defaultDepartmentId, 
-                contact: { email },
-                channel: 'Email' 
-            };
-
-            const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
-            const newTicket = ticketResponse.data;
-            let fullResponseData = { ticketCreate: newTicket };
-
-            writeToTicketLog({ ticketNumber: newTicket.ticketNumber, email });
-
-            if (sendDirectReply) {
-                try {
-                    const replyData = {
-                        fromEmailAddress: activeProfile.fromEmailAddress,
-                        to: email,
-                        content: description,
-                        contentType: 'html',
-                        channel: 'EMAIL'
-                    };
-                    const replyResponse = await makeApiCall('post', `/api/v1/tickets/${newTicket.id}/sendReply`, replyData, activeProfile);
-                    fullResponseData.sendReply = replyResponse.data;
-                } catch (replyError) {
-                    fullResponseData.sendReply = parseError(replyError);
-                }
-            }
-
-            socket.emit('singleTicketResult', { success: true, fullResponse: fullResponseData });
-
-            if (verifyEmail) {
-                verifyTicketEmail(newTicket, activeProfile, socket, 'singleTicketResult');
-            }
-
-        } catch (error) {
-            const { message, fullResponse } = parseError(error);
-            socket.emit('singleTicketResult', { success: false, error: message, fullResponse });
-        }
-    });
 });
 
 server.listen(port, () => {
