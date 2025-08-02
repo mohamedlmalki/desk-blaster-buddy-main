@@ -5,14 +5,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, Activity, Edit } from 'lucide-react';
+import { User, Building, AlertCircle, CheckCircle, Loader, MailWarning, RefreshCw, Activity, Edit, Trash2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 interface Profile {
   profileName: string;
   orgId: string;
   defaultDepartmentId: string;
-  mailReplyAddressId?: string; // This line is updated
+  mailReplyAddressId?: string; 
 }
 
 type ApiStatus = {
@@ -36,7 +36,8 @@ interface ProfileSelectorProps {
   onShowStatus: () => void;
   onFetchFailures: () => void;
   onManualVerify: () => void;
-  socket: any; // This prop is added
+  socket: any; 
+  onClearTicketLogs: () => void; // New prop for the clear logs button
 }
 
 export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
@@ -49,6 +50,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
   onFetchFailures,
   onManualVerify,
   socket,
+  onClearTicketLogs, // Destructure the new prop
 }) => {
   const { toast } = useToast();
   const [displayName, setDisplayName] = useState('');
@@ -63,7 +65,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
             if (result.notConfigured) {
                 setDisplayName('N/A');
             } else {
-                setDisplayName(result.data?.displayName || '');
+                setDisplayName(result.data?.data?.displayName || '');
             }
         } else {
             toast({ title: "Error Fetching Sender Name", description: result.error, variant: "destructive" });
@@ -71,7 +73,7 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
     };
     const handleUpdateResult = (result: any) => {
         if (result.success) {
-            setDisplayName(result.data.displayName);
+            setDisplayName(result.data.data.displayName);
             toast({ title: "Success", description: "Sender name has been updated." });
         } else {
             toast({ title: "Error Updating Name", description: result.error, variant: "destructive" });
@@ -177,6 +179,11 @@ export const ProfileSelector: React.FC<ProfileSelectorProps> = ({
                 <span className="text-sm font-medium text-foreground">Active Profile</span>
                 
                 <div className="flex items-center space-x-2">
+                  {/* --- NEW BUTTON ADDED HERE --- */}
+                  <Button variant="outline" size="sm" onClick={onClearTicketLogs}>
+                      <Trash2 className="h-4 w-4 mr-2"/>
+                      Clear Ticket Logs
+                  </Button>
                   <Button variant="outline" size="sm" onClick={onFetchFailures}>
                       <MailWarning className="h-4 w-4 mr-2"/>
                       View Email Failures

@@ -1,5 +1,3 @@
-// src/components/dashboard/TicketForm.tsx
-
 import React, { useState, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,9 +18,8 @@ interface TicketFormData {
   verifyEmail: boolean;
 }
 
-// --- MODIFICATION 1: Update props for a controlled component ---
 interface TicketFormProps {
-  onSubmit: (data: TicketFormData) => void; 
+  onSubmit: () => void; // The parent already has the form data, so we just trigger the submit
   isProcessing: boolean;
   isPaused: boolean;
   onPauseResume: () => void;
@@ -42,9 +39,6 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   formData,
   onFormDataChange,
 }) => {
-  // This component no longer holds its own form state.
-  // It receives `formData` from its parent.
-
   const [testEmail, setTestEmail] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -54,10 +48,9 @@ export const TicketForm: React.FC<TicketFormProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSubmit(formData);
+    onSubmit(); // Call the parent's submit handler
   };
 
-  // --- MODIFICATION 2: Update handlers to use the onFormDataChange prop ---
   const handleInputChange = (field: keyof Omit<TicketFormData, 'sendDirectReply' | 'verifyEmail'>, value: string | number) => {
     onFormDataChange({ ...formData, [field]: value });
   };
@@ -67,6 +60,10 @@ export const TicketForm: React.FC<TicketFormProps> = ({
   }
 
   const handleTestClick = () => {
+    if (!testEmail) {
+        alert("Please enter an email address for the test ticket.");
+        return;
+    }
     onSendTest({
         email: testEmail,
         subject: formData.subject,

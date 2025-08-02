@@ -94,7 +94,7 @@ const getValidAccessToken = async (profile) => {
             client_id: profile.clientId,
             client_secret: profile.clientSecret,
             grant_type: 'refresh_token',
-            scope: 'Desk.tickets.ALL,Desk.settings.READ,Desk.settings.UPDATE'
+            scope: 'Desk.tickets.ALL,Desk.settings.ALL'
         });
 
         const response = await axios.post('https://accounts.zoho.com/oauth/v2/token', params);
@@ -208,6 +208,8 @@ io.on('connection', (socket) => {
             const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
             const newTicket = ticketResponse.data;
             let fullResponseData = { ticketCreate: newTicket };
+
+            writeToTicketLog({ ticketNumber: newTicket.ticketNumber, email });
 
             if (sendDirectReply) {
                 try {
@@ -366,8 +368,9 @@ io.on('connection', (socket) => {
                 });
             } else {
                 const failureResponse = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${profile.defaultDepartmentId}`, null, profile);
-                fullResponse.verifyEmail.failure = failureResponse.data;
                 const failure = failureResponse.data.data?.find(f => f.ticketNumber === ticket.ticketNumber);
+                
+                fullResponse.verifyEmail.failure = failure || "No specific failure found for this ticket.";
     
                 let verificationMessage = 'Email verification: Not Found.';
                 if (failure) {
@@ -442,7 +445,7 @@ io.on('connection', (socket) => {
             const failures = response.data.data || [];
             const ticketLog = readTicketLog();
             const failuresWithEmails = failures.map(failure => {
-                const logEntry = ticketLog.find(entry => entry.ticketNumber === failure.ticketNumber);
+                const logEntry = ticketLog.find(entry => String(entry.ticketNumber) === String(failure.ticketNumber));
                 return {
                     ...failure,
                     email: logEntry ? logEntry.email : 'Unknown',
@@ -474,22 +477,47 @@ io.on('connection', (socket) => {
             socket.emit('clearEmailFailuresResult', { success: false, error: message });
         }
     });
+    
+    // --- NEW: Clear Ticket Logs functionality ---
+    socket.on('clearTicketLogs', () => {
+        try {
+            fs.writeFileSync(TICKET_LOG_PATH, JSON.stringify([], null, 2));
+            socket.emit('clearTicketLogsResult', { success: true });
+        } catch (error) {
+            console.error('[ERROR] Could not clear ticket-log.json:', error);
+            socket.emit('clearTicketLogsResult', { success: false, error: 'Failed to clear log file on server.' });
+        }
+    });
 
-    // --- NEW FUNCTIONALITY ---
     socket.on('getMailReplyAddressDetails', async (data) => {
         try {
             const { selectedProfileName } = data;
+            console.log(`[DEBUG] Received request for profile: ${selectedProfileName}`);
+
             const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
             const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
 
-            if (!activeProfile || !activeProfile.mailReplyAddressId) {
+            if (!activeProfile) {
+                console.error(`[DEBUG] Profile not found: ${selectedProfileName}`);
+                return socket.emit('mailReplyAddressDetailsResult', { success: false, error: 'Profile not found' });
+            }
+            
+            console.log(`[DEBUG] Found mailReplyAddressId: ${activeProfile.mailReplyAddressId}`);
+
+            if (!activeProfile.mailReplyAddressId) {
                 return socket.emit('mailReplyAddressDetailsResult', { success: true, notConfigured: true });
             }
 
             const response = await makeApiCall('get', `/api/v1/mailReplyAddress/${activeProfile.mailReplyAddressId}`, null, activeProfile);
+            
+            console.log("[DEBUG] Zoho API Success Response:", response.data);
+
             socket.emit('mailReplyAddressDetailsResult', { success: true, data: response.data });
         } catch (error) {
-            const { message } = parseError(error);
+            const { message, fullResponse } = parseError(error);
+            
+            console.error("[DEBUG] Zoho API Error:", { message, fullResponse });
+
             socket.emit('mailReplyAddressDetailsResult', { success: false, error: message });
         }
     });
@@ -513,7 +541,60 @@ io.on('connection', (socket) => {
             socket.emit('updateMailReplyAddressResult', { success: false, error: message });
         }
     });
-    // --- END NEW FUNCTIONALITY ---
+    
+    socket.on('createSingleTicket', async (data) => {
+        const { email, subject, description, selectedProfileName, sendDirectReply, verifyEmail } = data;
+        if (!email || !selectedProfileName) {
+            return socket.emit('singleTicketResult', { success: false, error: 'Missing email or profile.' });
+        }
+        try {
+            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+            const activeProfile = profiles.find(p => p.profileName === selectedProfileName);
+            if (!activeProfile) {
+                return socket.emit('singleTicketResult', { success: false, error: 'Profile not found.' });
+            }
+            
+            const ticketData = { 
+                subject, 
+                description, 
+                departmentId: activeProfile.defaultDepartmentId, 
+                contact: { email },
+                channel: 'Email' 
+            };
+
+            const ticketResponse = await makeApiCall('post', '/api/v1/tickets', ticketData, activeProfile);
+            const newTicket = ticketResponse.data;
+            let fullResponseData = { ticketCreate: newTicket };
+
+            writeToTicketLog({ ticketNumber: newTicket.ticketNumber, email });
+
+            if (sendDirectReply) {
+                try {
+                    const replyData = {
+                        fromEmailAddress: activeProfile.fromEmailAddress,
+                        to: email,
+                        content: description,
+                        contentType: 'html',
+                        channel: 'EMAIL'
+                    };
+                    const replyResponse = await makeApiCall('post', `/api/v1/tickets/${newTicket.id}/sendReply`, replyData, activeProfile);
+                    fullResponseData.sendReply = replyResponse.data;
+                } catch (replyError) {
+                    fullResponseData.sendReply = parseError(replyError);
+                }
+            }
+
+            socket.emit('singleTicketResult', { success: true, fullResponse: fullResponseData });
+
+            if (verifyEmail) {
+                verifyTicketEmail(newTicket, activeProfile, socket, 'singleTicketResult');
+            }
+
+        } catch (error) {
+            const { message, fullResponse } = parseError(error);
+            socket.emit('singleTicketResult', { success: false, error: message, fullResponse });
+        }
+    });
 });
 
 server.listen(port, () => {

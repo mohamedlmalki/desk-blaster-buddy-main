@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { AlertCircle, Ticket, User, Building, MailWarning, Loader2, RefreshCw, Mail, Download, Trash2 } from 'lucide-react';
 
+// Interfaces remain the same
 interface JobState {
   results: TicketResult[];
   isProcessing: boolean;
@@ -22,7 +23,6 @@ interface JobState {
   countdown: number;
   currentDelay: number;
   filterText: string;
-  formData: TicketFormData;
 }
 
 interface Jobs {
@@ -63,8 +63,14 @@ interface EmailFailure {
   } | null;
 }
 
-const SERVER_URL = "http://localhost:3000";
+interface ZohoDashboardProps {
+  formData: TicketFormData;
+  onFormDataChange: (newFormData: TicketFormData) => void;
+  jobs: Jobs;
+  setJobs: React.Dispatch<React.SetStateAction<Jobs>>;
+}
 
+const SERVER_URL = "http://localhost:3000";
 let socket: Socket;
 
 const createInitialJobState = (): JobState => ({
@@ -78,21 +84,12 @@ const createInitialJobState = (): JobState => ({
   countdown: 0,
   currentDelay: 1,
   filterText: '',
-  formData: {
-    emails: '',
-    subject: '',
-    description: '',
-    delay: 1,
-    sendDirectReply: false,
-    verifyEmail: false,
-  },
 });
 
-export const ZohoDashboard: React.FC = () => {
+export const ZohoDashboard: React.FC<ZohoDashboardProps> = ({ formData, onFormDataChange, jobs, setJobs }) => {
   const { toast } = useToast();
   
   const [activeProfileName, setActiveProfileName] = useState<string | null>(null);
-  const [jobs, setJobs] = useState<Jobs>({});
 
   const timersRef = useRef<{ [key: string]: { processing?: NodeJS.Timeout, countdown?: NodeJS.Timeout } }>({});
 
@@ -117,6 +114,9 @@ export const ZohoDashboard: React.FC = () => {
     refetchOnWindowFocus: false,
   });
 
+  // --- MODIFICATION: Split useEffect into two separate hooks ---
+
+  // Effect to initialize the jobs state only once
   useEffect(() => {
     if (profiles.length > 0 && Object.keys(jobs).length === 0) {
       const initialJobs: Jobs = {};
@@ -124,12 +124,17 @@ export const ZohoDashboard: React.FC = () => {
         initialJobs[p.profileName] = createInitialJobState();
       });
       setJobs(initialJobs);
-      if (!activeProfileName) {
-        setActiveProfileName(profiles[0].profileName);
-      }
     }
-  }, [profiles, activeProfileName, jobs]);
+  }, [profiles, jobs, setJobs]);
 
+  // Effect to set the active profile whenever profiles load
+  useEffect(() => {
+    if (profiles.length > 0 && !activeProfileName) {
+      setActiveProfileName(profiles[0].profileName);
+    }
+  }, [profiles, activeProfileName]);
+  
+  // All socket useEffect listeners remain the same...
   useEffect(() => {
     socket = io(SERVER_URL);
 
@@ -219,17 +224,25 @@ export const ZohoDashboard: React.FC = () => {
         }
     });
 
+    socket.on('clearTicketLogsResult', (result) => {
+      if (result.success) {
+        toast({ title: "Success", description: "Ticket log has been cleared." });
+      } else {
+        toast({ title: "Error Clearing Logs", description: result.error, variant: "destructive" });
+      }
+    });
+
     return () => {
       socket.disconnect();
     };
-  }, [toast]);
-  
+  }, [toast, setJobs]);
+
   useEffect(() => {
     if (activeProfileName && socket?.connected) {
       setApiStatus({ status: 'loading', message: 'Checking API connection...' });
       socket.emit('checkApiStatus', { selectedProfileName: activeProfileName });
     }
-  }, [activeProfileName]);
+  }, [activeProfileName, socket?.connected]);
 
   useEffect(() => {
     const timers = timersRef.current;
@@ -281,7 +294,41 @@ export const ZohoDashboard: React.FC = () => {
         if (t.countdown) clearInterval(t.countdown);
       });
     };
-  }, [jobs]);
+  }, [jobs, setJobs]);
+
+  const handleFormSubmit = async () => {
+    if (!activeProfileName) {
+        toast({ title: "Missing Information", description: "Please select a profile.", variant: "destructive" });
+        return;
+    }
+    const emails = formData.emails.split('\n').map(email => email.trim()).filter(email => email !== '');
+    if (emails.length === 0) {
+      toast({ title: "Missing Information", description: "Please enter at least one email.", variant: "destructive" });
+      return;
+    }
+    
+    setJobs(prev => ({
+        ...prev,
+        [activeProfileName]: {
+            ...prev[activeProfileName],
+            results: [],
+            isProcessing: true,
+            isPaused: false,
+            isComplete: false,
+            processingStartTime: new Date(),
+            totalTicketsToProcess: emails.length,
+            currentDelay: formData.delay,
+        }
+    }));
+    
+    toast({ title: `Processing Started for ${activeProfileName}`, description: `Creating ${emails.length} tickets...` });
+
+    socket.emit('startBulkCreate', {
+      ...formData,
+      emails,
+      selectedProfileName: activeProfileName
+    });
+  };
 
   const handleProfileChange = (profileName: string) => {
     const profile = profiles.find(p => p.profileName === profileName);
@@ -317,53 +364,6 @@ export const ZohoDashboard: React.FC = () => {
     });
     socket.emit('sendTestTicket', { ...data, selectedProfileName: activeProfileName });
   };
-
-  const handleFormDataChange = (newFormData: TicketFormData) => {
-    if (activeProfileName) {
-      setJobs(prevJobs => ({
-        ...prevJobs,
-        [activeProfileName]: {
-          ...prevJobs[activeProfileName],
-          formData: newFormData,
-        },
-      }));
-    }
-  };
-
-  const handleFormSubmit = async (formData: TicketFormData) => {
-    if (!activeProfileName) {
-        toast({ title: "Missing Information", description: "Please select a profile.", variant: "destructive" });
-        return;
-    }
-    const emails = formData.emails.split('\n').map(email => email.trim()).filter(email => email !== '');
-    if (emails.length === 0) {
-      toast({ title: "Missing Information", description: "Please enter at least one email.", variant: "destructive" });
-      return;
-    }
-    
-    setJobs(prev => ({
-        ...prev,
-        [activeProfileName]: {
-            ...prev[activeProfileName],
-            results: [],
-            isProcessing: true,
-            isPaused: false,
-            isComplete: false,
-            processingStartTime: new Date(),
-            totalTicketsToProcess: emails.length,
-            currentDelay: formData.delay,
-            formData: formData, 
-        }
-    }));
-    
-    toast({ title: `Processing Started for ${activeProfileName}`, description: `Creating ${emails.length} tickets...` });
-
-    socket.emit('startBulkCreate', {
-      ...formData,
-      emails,
-      selectedProfileName: activeProfileName
-    });
-  };
   
   const handlePauseResume = () => {
     if (!activeProfileName) return;
@@ -393,6 +393,13 @@ export const ZohoDashboard: React.FC = () => {
     socket.emit('getEmailFailures', { selectedProfileName: activeProfileName });
   };
   
+  const handleClearTicketLogs = () => {
+    if (window.confirm("Are you sure you want to permanently delete all ticket logs? This action cannot be undone.")) {
+      toast({ title: "Clearing Ticket Logs..." });
+      socket.emit('clearTicketLogs');
+    }
+  };
+
   const selectedProfile = profiles.find(p => p.profileName === activeProfileName) || null;
   const currentJob = activeProfileName ? jobs[activeProfileName] : null;
 
@@ -436,12 +443,14 @@ export const ZohoDashboard: React.FC = () => {
             onShowStatus={() => setIsStatusModalOpen(true)}
             onFetchFailures={handleFetchEmailFailures}
             onManualVerify={handleManualVerify}
+            socket={socket}
+            onClearTicketLogs={handleClearTicketLogs}
           />
           {currentJob && (
             <>
               <TicketForm
-                formData={currentJob.formData}
-                onFormDataChange={handleFormDataChange}
+                formData={formData}
+                onFormDataChange={onFormDataChange}
                 onSubmit={handleFormSubmit}
                 isProcessing={currentJob.isProcessing}
                 isPaused={currentJob.isPaused}
