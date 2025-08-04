@@ -55,7 +55,11 @@ const SingleTicket = () => {
   const [sendDirectReply, setSendDirectReply] = useState(false);
   const [verifyEmail, setVerifyEmail] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [serverResponse, setServerResponse] = useState<any>(null);
+  
+  // --- NEW: State for multi-step responses ---
+  const [ticketCreationResponse, setTicketCreationResponse] = useState<any>(null);
+  const [verificationResponse, setVerificationResponse] = useState<any>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // --- State for modals and failures ---
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
@@ -134,6 +138,30 @@ const SingleTicket = () => {
     }
   };
 
+  const handleVerification = async (ticket: any, profileName: string) => {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/tickets/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ticket, profileName }),
+        });
+        const result = await response.json();
+        setVerificationResponse(result);
+        toast({
+            title: result.success ? "Verification Complete" : "Verification Failed",
+            description: result.details,
+            variant: result.success ? "default" : "destructive",
+        });
+    } catch (error) {
+        const errorMessage = (error instanceof Error) ? error.message : "An unknown network error occurred.";
+        setVerificationResponse({ success: false, error: errorMessage });
+        toast({ title: "Verification Network Error", description: errorMessage, variant: "destructive" });
+    } finally {
+        setIsVerifying(false);
+    }
+  };
+
+
   const handleCreateTicket = async () => {
     if (!activeProfileName) {
       toast({ title: "No Profile Selected", variant: "destructive" });
@@ -145,7 +173,9 @@ const SingleTicket = () => {
     }
 
     setIsProcessing(true);
-    setServerResponse(null);
+    setTicketCreationResponse(null);
+    setVerificationResponse(null);
+    setIsVerifying(verifyEmail);
     toast({ title: "Creating Ticket..." });
 
     try {
@@ -159,28 +189,38 @@ const SingleTicket = () => {
                 subject,
                 description,
                 sendDirectReply,
-                verifyEmail, // Note: Verification is not implemented for HTTP requests
                 selectedProfileName: activeProfileName,
             }),
         });
 
         const result = await response.json();
         
-        setServerResponse(result);
+        setTicketCreationResponse(result);
         toast({
             title: result.success ? "Ticket Created Successfully" : "Ticket Creation Failed",
             description: result.success ? `Ticket #${result.fullResponse?.ticketCreate?.ticketNumber} created.` : result.error,
             variant: result.success ? "default" : "destructive",
         });
+        
+        if (result.success && verifyEmail) {
+            // Wait 10 seconds then trigger verification
+            setTimeout(() => {
+                handleVerification(result.fullResponse.ticketCreate, activeProfileName);
+            }, 10000);
+        } else {
+            setIsVerifying(false);
+        }
+
 
     } catch (error) {
         const errorMessage = (error instanceof Error) ? error.message : "An unknown network error occurred.";
-        setServerResponse({ success: false, error: errorMessage });
+        setTicketCreationResponse({ success: false, error: errorMessage });
         toast({
             title: "Network Error",
             description: errorMessage,
             variant: "destructive",
         });
+        setIsVerifying(false);
     } finally {
         setIsProcessing(false);
     }
@@ -285,7 +325,7 @@ const SingleTicket = () => {
                         <Checkbox id="verifyEmail" checked={verifyEmail} onCheckedChange={(checked) => setVerifyEmail(!!checked)} disabled={isProcessing || sendDirectReply} />
                         <div>
                           <Label htmlFor="verifyEmail" className="font-medium hover:cursor-pointer">Verify Automation Email</Label>
-                          <p className="text-xs text-muted-foreground">NOTE: Verification is not supported for single ticket creation via HTTP request.</p>
+                          <p className="text-xs text-muted-foreground">Waits ~10s to check if the automation email was sent successfully.</p>
                         </div>
                       </div>
                     </div>
@@ -304,26 +344,77 @@ const SingleTicket = () => {
             </CardContent>
           </Card>
 
-          {/* --- RESPONSE DISPLAY AREA --- */}
-          {serverResponse && (
-            <div className="space-y-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center space-x-2">
-                    <FileText className="h-5 w-5 text-primary"/>
-                    <span>
-                      {serverResponse.success ? 'Ticket Creation Response' : 'Error Response'}
-                    </span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
-                    {JSON.stringify(serverResponse.fullResponse || serverResponse, null, 2)}
-                  </pre>
-                </CardContent>
-              </Card>
-            </div>
-          )}
+           {/* --- RESPONSE DISPLAY AREA (MODIFIED) --- */}
+           <div className="space-y-4">
+            {ticketCreationResponse && (
+              <>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center space-x-2">
+                      <FileText className="h-5 w-5 text-primary"/>
+                      <span>
+                        {ticketCreationResponse.success ? 'Ticket Creation Response' : 'Error Response'}
+                      </span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
+                      {JSON.stringify(
+                        ticketCreationResponse.fullResponse?.ticketCreate || ticketCreationResponse.fullResponse || ticketCreationResponse,
+                        null,
+                        2
+                      )}
+                    </pre>
+                  </CardContent>
+                </Card>
+
+                {ticketCreationResponse.success && ticketCreationResponse.fullResponse?.sendReply && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center space-x-2">
+                        <Mail className="h-5 w-5 text-primary"/>
+                        <span>Send Reply Response</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
+                        {JSON.stringify(ticketCreationResponse.fullResponse.sendReply, null, 2)}
+                      </pre>
+                    </CardContent>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {isVerifying && (
+                <Card>
+                    <CardContent className="p-6">
+                        <div className="flex items-center justify-center space-x-2 text-muted-foreground">
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Verifying email, please wait approximately 10 seconds...</span>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
+
+            {verificationResponse && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center space-x-2">
+                        <FileText className="h-5 w-5 text-primary"/>
+                        <span>Email Verification Response</span>
+                        </CardTitle>
+                        <CardDescription>{verificationResponse.details}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <pre className="bg-muted p-4 rounded-lg text-xs font-mono text-foreground border max-h-96 overflow-y-auto">
+                        {JSON.stringify(verificationResponse.fullResponse?.verifyEmail || verificationResponse.fullResponse, null, 2)}
+                        </pre>
+                    </CardContent>
+                </Card>
+            )}
+          </div>
+
         </div>
       </DashboardLayout>
       

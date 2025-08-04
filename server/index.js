@@ -183,6 +183,81 @@ app.post('/api/tickets/single', async (req, res) => {
     }
 });
 
+// --- NEW: HTTP ENDPOINT FOR TICKET VERIFICATION ---
+app.post('/api/tickets/verify', async (req, res) => {
+    const { ticket, profileName } = req.body;
+
+    if (!ticket || !profileName) {
+        return res.status(400).json({ success: false, error: 'Missing ticket details or profile.' });
+    }
+
+    try {
+        const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
+        const activeProfile = profiles.find(p => p.profileName === profileName);
+        if (!activeProfile) {
+            return res.status(404).json({ success: false, error: 'Profile not found.' });
+        }
+        
+        // This is an async function but we await it here
+        const verificationResult = await getVerificationStatus(ticket, activeProfile);
+        res.json(verificationResult);
+
+    } catch (error) {
+        const { message, fullResponse } = parseError(error);
+        res.status(500).json({ success: false, error: `Verification check failed: ${message}`, fullResponse });
+    }
+});
+
+// Helper function for verification logic, used by the new endpoint
+const getVerificationStatus = async (ticket, profile) => {
+    let fullResponse = { ticketDetails: ticket, verifyEmail: {} };
+    try {
+        const [workflowHistoryResponse, notificationHistoryResponse] = await Promise.all([
+            makeApiCall('get', `/api/v1/tickets/${ticket.id}/History?eventFilter=WorkflowHistory`, null, profile),
+            makeApiCall('get', `/api/v1/tickets/${ticket.id}/History?eventFilter=NotificationRuleHistory`, null, profile)
+        ]);
+
+        const allHistoryEvents = [
+            ...(workflowHistoryResponse.data.data || []),
+            ...(notificationHistoryResponse.data.data || [])
+        ];
+        
+        fullResponse.verifyEmail.history = { workflowHistory: workflowHistoryResponse.data, notificationHistory: notificationHistoryResponse.data };
+
+        if (allHistoryEvents.length > 0) {
+            return {
+                success: true, 
+                details: 'Email verification: Sent successfully.',
+                fullResponse,
+            };
+        } else {
+            const failureResponse = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${profile.defaultDepartmentId}`, null, profile);
+            const failure = failureResponse.data.data?.find(f => String(f.ticketNumber) === String(ticket.ticketNumber));
+            
+            fullResponse.verifyEmail.failure = failure || "No specific failure found for this ticket.";
+
+            let details = 'Email verification: Not Found.';
+            if (failure) {
+                details = `Email verification: Failed. Reason: ${failure.reason}`;
+            }
+            
+            return {
+                success: false, 
+                details,
+                fullResponse,
+            };
+        }
+    } catch (error) {
+        const { message, fullResponse: errorFullResponse } = parseError(error);
+        fullResponse.verifyEmail.error = errorFullResponse;
+        return {
+            success: false,
+            details: `Email verification: Failed to check status. Error: ${message}`,
+            fullResponse,
+        };
+    }
+};
+
 
 app.get('/api/profiles', (req, res) => {
     try {
@@ -237,20 +312,6 @@ io.on('connection', (socket) => {
             }, interval);
         });
     };
-
-    // --- NEW: WebSocket listener for verifying a single ticket ---
-    socket.on('verifySingleTicket', async ({ ticket, profileName }) => {
-        try {
-            const profiles = JSON.parse(fs.readFileSync(path.join(__dirname, 'profiles.json')));
-            const activeProfile = profiles.find(p => p.profileName === profileName);
-            if (activeProfile && ticket) {
-                await verifyTicketEmail(ticket, activeProfile, socket, 'singleTicketVerificationResult');
-            }
-        } catch (error) {
-            console.error('[ERROR] in verifySingleTicket:', error);
-        }
-    });
-
 
     socket.on('sendTestTicket', async (data) => {
         const { email, subject, description, selectedProfileName, sendDirectReply, verifyEmail } = data;
@@ -435,7 +496,7 @@ io.on('connection', (socket) => {
                 });
             } else {
                 const failureResponse = await makeApiCall('get', `/api/v1/emailFailureAlerts?department=${profile.defaultDepartmentId}`, null, profile);
-                const failure = failureResponse.data.data?.find(f => f.ticketNumber === ticket.ticketNumber);
+                const failure = failureResponse.data.data?.find(f => String(f.ticketNumber) === String(ticket.ticketNumber));
                 
                 fullResponse.verifyEmail.failure = failure || "No specific failure found for this ticket.";
     
